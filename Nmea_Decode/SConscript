@@ -1,0 +1,14 @@
+import rtconfig
+from building import *
+
+# get current directory
+cwd = GetCurrentDir()
+
+src     = Glob('src/*.c')
+
+path    = [cwd + '/include/nmea']
+	
+group = DefineGroup('nmea_decode', src, depend = [''], CPPPATH = path)
+
+Return('group')
+

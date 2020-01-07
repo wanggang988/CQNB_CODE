@@ -1,0 +1,1 @@
+1、软件包Sensor的线程创建在文件sensor_cmd.c的函数static void sensor_int(int argc, char **argv)中。
