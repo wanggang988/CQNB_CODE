@@ -7,9 +7,18 @@
 #include "drv_gpio.h"
 #include <drv_lptim.h>
 #include "devtype.h"
+
+#define LOG_TAG "nbiot_app"
+#define LOG_LVL DBG_LOG
+#include "ulog.h"			//	必须在LOG_TAG和LOG_LVL下面
+
 #define mipex_buflen    1024
-
-
+#define  QLWEVTIND  1<<15
+#define  NMSTATUS   1<<16
+#define AT_CLIENT_RECV_BUFF_LEN   512
+#define AT_DEFAULT_TIMEOUT        5000
+#define AT_OK                     "OK"
+#define AT_ERROR                  "ERROR"
 struct rt_event nb_event;   //事件控制块
 uint8_t cm_senddata[512];
 
@@ -81,10 +90,70 @@ int csq;    //信号质量
  
 struct rt_event nb_event;   //事件控制块
 at_response_t resp;     //resp:响应结构体
+static int nb_tel_autoconnect();   //NBIOT模组电信自动入网流程函数
+static int nb_tel_manconnect();   //NBIOT模组电信手动入网流程函数
 static void nb_opennetwork(void);
 void nb_send(char* msg,uint16_t len);
 static void Hex2Str(char* pSrc, char* pDst, unsigned int nSrcLength);
 extern uint8_t crc8_table(uint8_t *ptr, uint8_t len);
+static int check_send_cmd(const char* cmd, const char* resp_expr, const rt_size_t lines, const rt_int32_t timeout);
+/**
+ * This function will send command and check the result.
+ *
+ * @param cmd       command to at client
+ * @param resp_expr expected response expression
+ * @param lines     response lines
+ * @param timeout   waiting time
+ *
+ * @return match successful return RT_EOK, otherwise return error code
+ */
+static int check_send_cmd(const char* cmd, const char* resp_expr, 
+                          const rt_size_t lines, const rt_int32_t timeout)
+{
+    at_response_t resp = RT_NULL;
+    int result = 0;
+
+    resp = at_create_resp(AT_CLIENT_RECV_BUFF_LEN, lines, rt_tick_from_millisecond(timeout));
+    if (resp == RT_NULL)
+    {
+        LOG_E("No memory for response structure!");
+        return -RT_ENOMEM;
+    }
+
+    result = at_exec_cmd(resp, cmd);
+    if (result != RT_EOK)
+    {
+        LOG_E("AT client send commands failed or return response error!");
+        at_delete_resp(resp);
+        return result;
+    }
+
+#if 1
+    /* Print response line buffer */
+//    char *line_buffer = RT_NULL;
+    const char * line_buffer = RT_NULL;
+
+    for(rt_size_t line_num = 1; line_num <= resp->line_counts; line_num++)
+    {
+        if((line_buffer = at_resp_get_line(resp, line_num)) != RT_NULL)
+            LOG_D("line %d buffer : %s", line_num, line_buffer);
+        else
+            LOG_D("Parse line buffer error!");
+    }
+#endif
+
+    char resp_arg[AT_CMD_MAX_LEN] = { 0 };
+    if (at_resp_parse_line_args_by_kw(resp, resp_expr, "%s", resp_arg) <= 0)
+    {
+        at_delete_resp(resp);
+        LOG_E("# >_< Failed");
+        return -RT_ERROR;
+    }
+
+    LOG_D("# ^_^ successed");
+    at_delete_resp(resp);
+    return RT_EOK;
+}
 /* nb haraware reset 模块上电后，系统自动复位 */
 static void nb_hardware_reset(void)
 {
@@ -202,20 +271,31 @@ static void urc_miplexecute_func(const char *data, rt_size_t size)
     }
     cm_decode(buff_len,mipex_buf);
 }
-#define urc_table_size 9
+static void urc_qlwevtind_func(const char *data, rt_size_t size)
+{
+	rt_kprintf("订阅对象19/0/0完成\r\n");
+	rt_event_send(&nb_event,QLWEVTIND);         
+}
+static void urc_nmstatus_func(const char *data, rt_size_t size)
+{
+	rt_kprintf("UE可以发送数据!\r\n");
+	rt_event_send(&nb_event,NMSTATUS);         
+}
+#define urc_table_size 11
 static struct at_urc urc_table[urc_table_size] = {
     {"+CFUN:1","\r\n", urc_cfun_func},
 	{"+CGATT:1", "\r\n", urc_cgatt_func},
 	{"+CEREG:0,1", "\r\n", urc_cereg_func},
 	{"+NCONFIG:AUTOCONNECT,TRUE", "\r\n", urc_nconfig_func},
 //	{"+", "NNMI", urc_nnmi_func},
-//	{"+QLWEVTIND:3", "\r\n", urc_qlwevtind_func},
+
     {"+MIPLEVENT: 0,","\r\n",urc_event_func},
     {"+MIPLOBSERVE: 0,","\r\n",urc_miplobserve_func},
     {"+MIPLDISCOVER: 0,","\r\n",urc_mipldiscover_func},
     {"+MIPLEXECUTE: 0,","\r\n",urc_miplexecute_func},
     {"+CME ERROR: 50", "\r\n", urc_error50_func},
-//    {"+MIPLEVENT: 0,15","\r\n",urc_dreg_event_func},
+    {"+QLWEVTIND:3","\r\n",urc_qlwevtind_func},
+    {"+NMSTATUS:MO_DATA_ENABLED","\r\n",urc_nmstatus_func},
 //    {"+MIPLEVENT: 0,20","\r\n",urc_response_event_func},
 //    {"+MIPLEVENT: 0,25","\r\n",urc_notify_event_func},
 //    {"+MIPLEVENT: 0,7","\r\n",urc_reg_event_func},
@@ -312,7 +392,9 @@ void nb_thread_entry(void *parameter)
 	at_set_urc_table(urc_table,urc_table_size);
     rt_thread_delay(1000*5);
 	kvinit();   //初始值flash
-	nb_opennetwork();
+//    nb_tel_autoconnect();
+    nb_tel_manconnect();
+//	nb_opennetwork();
 //    adc_vol_sample();          //adc sample
     refreshdata();  
     rt_event_recv(&nb_event,GPS,RT_EVENT_FLAG_OR,1000 * 60 * 3, RT_NULL); //3min for gps
@@ -374,91 +456,326 @@ void life_thread_entry(void *parameter)
 }
 /* func: connect and open network */
 int status;
-static void nb_opennetwork()
+//static void nb_opennetwork()
+//{
+//    at_response_t resp;     //resp:响应结构体
+//    resp = at_create_resp(512,3,500);
+//	int status;
+//    uint16_t n;
+//    nb_hardware_reset();
+
+//    rt_thread_delay(1000 * 7);
+//	at_exec_cmd(resp,"AT+NATSPEED=9600,3,1,0,1,0,0");   // 配置波特率
+////	at_exec_cmd(resp,"AT+NBAND=3");   //联通
+//	at_exec_cmd(resp,"AT+NBAND=8");   // 移动 可以不配置
+////	at_exec_cmd(resp,"AT+NBAND=5");   // 电信
+
+//	if(at_client_wait_connect(1000*5) < 0)   // at_client_wait_connect():等待模块初始化完成
+//	{
+//		rt_kprintf("连接BC35-G模块失败\n");
+//	}
+//    rt_thread_delay(1000 * 2);
+//    do{
+//		at_exec_cmd(resp,"AT+CFUN?");
+//        rt_thread_delay(1000);	
+//	}while(rt_event_recv(&nb_event,cfun,RT_EVENT_FLAG_OR,1000, RT_NULL) != RT_EOK);
+//    do{
+//		at_exec_cmd(resp,"AT+NBAND?");
+//		at_resp_parse_line_args_by_kw(resp,"+NBAND:","+NBAND:%d",&status); //解析指定关键字行的响应数据
+//		rt_thread_delay(1000);
+//	}while(status != 8);
+//    at_exec_cmd(resp,"AT+CMEE=1");   //报告错误代码
+//    at_exec_cmd(resp,"AT+CIMI");     //international mobile subscriber id
+//    at_exec_cmd(resp,"AT+CGSN=1");     //获取NBIOT IMEI信息
+//    at_exec_cmd(resp,"AT+CPSMS=0");  //disable the use of PSM
+//    at_exec_cmd(resp,"AT+NCONFIG?");   //configure UE Behaviour
+//    rt_thread_delay(1000 * 3);
+//    at_exec_cmd(resp,"AT+COPS=1,2,\"46000\"");         //手动附网
+//	do{
+//		at_exec_cmd(resp,"AT+CSQ");
+//		at_resp_parse_line_args_by_kw(resp,"+CSQ:","+CSQ:%d",&status); //解析指定关键字行的响应数据
+//		rt_thread_delay(1000);
+//	}while(status > 31);
+//	
+//	do{
+//		at_exec_cmd(resp,"AT+CGATT?");
+//		rt_thread_delay(1000);
+//        }while(rt_event_recv(&nb_event,CGATT,RT_EVENT_FLAG_OR,1000, RT_NULL) != RT_EOK ); //RT_EVENT_FLAG_OR:逻辑或的方式接收事件
+//	
+//	do{
+//		at_exec_cmd(resp,"AT+CEREG?");
+//		rt_thread_delay(1000);
+//	}while(rt_event_recv(&nb_event,CEREG,RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,1000, RT_NULL) != RT_EOK);
+
+//    at_exec_cmd(resp,"AT+MIPLCONFIG=0,183.230.40.40,5683"); //configure LwM2M server IP and port
+//    rt_thread_delay(1000);
+//    at_exec_cmd(resp,"AT+MIPLCONFIG?");  //查询  LwM2M server ip and port
+//    rt_thread_delay(1000);
+//    connect_nb_net();
+//    at_delete_resp(resp);    
+//}
+
+/* query CSQ */
+void bc35_query_csq(void)
 {
+    int status = 0;
     at_response_t resp;     //resp:响应结构体
     resp = at_create_resp(512,3,500);
-	int status;
-    uint16_t n;
-    nb_hardware_reset();
-
-    rt_thread_delay(1000 * 7);
-	at_exec_cmd(resp,"AT+NATSPEED=9600,3,1,0,1,0,0");   // 配置波特率
-//	at_exec_cmd(resp,"AT+NBAND=3");   //联通
-	at_exec_cmd(resp,"AT+NBAND=8");   // 移动 可以不配置
-//	at_exec_cmd(resp,"AT+NBAND=5");   // 电信
-
-	if(at_client_wait_connect(1000*5) < 0)   // at_client_wait_connect():等待模块初始化完成
-	{
-		rt_kprintf("连接BC35-G模块失败\n");
-	}
-    rt_thread_delay(1000 * 2);
+    
     do{
-		at_exec_cmd(resp,"AT+CFUN?");
-        rt_thread_delay(1000);	
-	}while(rt_event_recv(&nb_event,cfun,RT_EVENT_FLAG_OR,1000, RT_NULL) != RT_EOK);
-    do{
-		at_exec_cmd(resp,"AT+NBAND?");
-		at_resp_parse_line_args_by_kw(resp,"+NBAND:","+NBAND:%d",&status); //解析指定关键字行的响应数据
-		rt_thread_delay(1000);
-	}while(status != 8);
-    at_exec_cmd(resp,"AT+CMEE=1");   //报告错误代码
-    at_exec_cmd(resp,"AT+CIMI");     //international mobile subscriber id
-    at_exec_cmd(resp,"AT+CGSN=1");     //获取NBIOT IMEI信息
-    at_exec_cmd(resp,"AT+CPSMS=0");  //disable the use of PSM
-    at_exec_cmd(resp,"AT+NCONFIG?");   //configure UE Behaviour
-    rt_thread_delay(1000 * 3);
-    at_exec_cmd(resp,"AT+COPS=1,2,\"46000\"");         //手动附网
-	do{
-		at_exec_cmd(resp,"AT+CSQ");
+		at_exec_cmd(resp,"AT+CSQ");   //查询信号强度
+        rt_thread_delay(300);	          //最大相应时间300ms
 		at_resp_parse_line_args_by_kw(resp,"+CSQ:","+CSQ:%d",&status); //解析指定关键字行的响应数据
 		rt_thread_delay(1000);
-	}while(status > 31);
-	
-	do{
-		at_exec_cmd(resp,"AT+CGATT?");
-		rt_thread_delay(1000);
-        }while(rt_event_recv(&nb_event,CGATT,RT_EVENT_FLAG_OR,1000, RT_NULL) != RT_EOK ); //RT_EVENT_FLAG_OR:逻辑或的方式接收事件
-	
-	do{
-		at_exec_cmd(resp,"AT+CEREG?");
+	}while(status > 31);    //信号强度大于31,再次查询。
+    at_delete_resp(resp);
+}
+/* query UE'S IP */
+void bc35_query_ip(void)
+{
+    uint8_t count = 0;
+    at_response_t resp;     //resp:响应结构体
+    resp = at_create_resp(512,3,500);
+    do{
+        at_exec_cmd(resp,"AT+CGPADDR"); //查询模块是否获取到IP
+        rt_thread_delay(300);  //最大相应时间300ms
+        if(at_resp_get_line_by_kw(resp,"OK") != NULL)
+        {
+            LOG_D("模块已分配到IP地址\r\n");
+            break;
+        }
+        rt_thread_delay(1000);  //延时1S再次查询，循环3次结束
+        count++;
+    }while(count < 3);
+    count = 0;  //次数清零
+    at_delete_resp(resp);
+}
+/*以下为电信的自动入网步骤*/
+static int nb_tel_autoconnect()
+{
+    int result = 0;
+    uint8_t count = 0;     //resp:命令循环次数
+	int status;
+    rt_pin_write(NB_EN_PIN,PIN_HIGH);//打开NBIOT模组电源，模块上电
+    rt_thread_delay(1000 * 5); //约5S后会输出Neul OK字样，表示模块可以执行AT指令
+	if(at_client_wait_connect(1000*5) < 0)   // at_client_wait_connect():等待模块初始化完成
+	{
+		LOG_D("连接BC35-G模块失败\n");
+	}
+    /* 报告错误代码 */
+    check_send_cmd("AT+CMEE=1", AT_OK, 0, 300);
+    if (result != RT_EOK) return result;
+    /* 设置UE为自动入网模式 */
+    result = check_send_cmd("AT+NCONFIG=AUTOCONNECT,TRUE", AT_OK, 0, 300);
+    if (result != RT_EOK) return result;
+    /* 复位UE */
+    check_send_cmd("AT+NRB", AT_OK, 0, 6000);
+    while(RT_EOK != check_send_cmd("AT", AT_OK, 0, AT_DEFAULT_TIMEOUT))
+    {
+        rt_thread_mdelay(1000);
+    }
+    /* 检查USIM卡是否初始化成功 */
+    do{
+        result = check_send_cmd("AT+CIMI", "460", 0, 300);
+        if (result == RT_EOK) 
+        {
+            LOG_D("获取到USIM卡的IMSI号\r\n");
+            break;
+        }
+        rt_thread_delay(1000);  //延时1S再次查询，循环10次结束
+        count++;
+       
+    }while(count < 10);
+    count = 0;  //次数清零
+    
+    /* 获取NBIOT IMEI信息 */
+    do{
+        result = check_send_cmd("AT+CGSN=1", "+CGSN", 0, 300);
+        if (result == RT_EOK) 
+        {
+            LOG_D("获取到NBIOT模块IMEI信息\r\n");
+            break;
+        }
+        if(result != RT_EOK)
+        {
+            return result; 
+        }
+        rt_thread_delay(1000);  //延时1S再次查询，循环10次结束
+        count++;
+    }while(count < 3);
+    count = 0;  //次数清零
+    bc35_query_csq();
+    /* 查询模块的网络附着状态 */
+    do{
+		at_exec_cmd(resp,"AT+CEREG?"); //查询模块的网络附着状态
 		rt_thread_delay(1000);
 	}while(rt_event_recv(&nb_event,CEREG,RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,1000, RT_NULL) != RT_EOK);
-
-    at_exec_cmd(resp,"AT+MIPLCONFIG=0,183.230.40.40,5683"); //configure LwM2M server IP and port
-    rt_thread_delay(1000);
-    at_exec_cmd(resp,"AT+MIPLCONFIG?");  //查询  LwM2M server ip and port
-    rt_thread_delay(1000);
-    connect_nb_net();
-    at_delete_resp(resp);    
+    /* 查询模块的PDP上下文激活状态 */
+    do{
+		at_exec_cmd(resp,"AT+CGATT?");//查询模块的PDP上下文激活状态
+		rt_thread_delay(1000);
+    }while(rt_event_recv(&nb_event,CGATT,RT_EVENT_FLAG_OR,1000, RT_NULL) != RT_EOK ); //RT_EVENT_FLAG_OR:逻辑或的方式接收事件
+    /* query UE'S IP Address */
+    bc35_query_ip();
+    /* 设置指示和消息 */
+    result = check_send_cmd("AT+NNMI=1", AT_OK, 0, 300);
+    if (result != RT_EOK) return result;
+    /* 当模块连接到CDP服务器时，该命令用来上报当前注册状态 */
+    do{
+		result = check_send_cmd("AT+NMSTATUS?", "+NMSTATUS", 0, 300); 
+		rt_thread_delay(1000);
+	}while(rt_event_recv(&nb_event,NMSTATUS,RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,1000, RT_NULL) != RT_EOK);  
+}
+/*以下为电信的手动入网步骤*/
+static int nb_tel_manconnect()
+{
+    int result = 0;
+    uint8_t count = 0;     //命令循环次数
+	int status;
+    rt_pin_write(NB_EN_PIN,PIN_HIGH);//打开NBIOT模组电源，模块上电
+    rt_thread_delay(1000 * 5); //约5S后会输出Neul OK字样，表示模块可以执行AT指令
+    if(at_client_wait_connect(1000*5) < 0)   // at_client_wait_connect():等待模块初始化完成
+	{
+		LOG_D("连接BC35-G模块失败\n");
+	}
+    /* 报告错误代码 */
+    check_send_cmd("AT+CMEE=1", AT_OK, 0, 300);
+    if (result != RT_EOK) return result;
+    /* 设置UE为手动入网模式 */
+    result = check_send_cmd("AT+NCONFIG=AUTOCONNECT,FALSE", AT_OK, 0, 300);
+    if (result != RT_EOK) return result;
+    /* 设置CDP服务器*/
+    do{
+        result = check_send_cmd("AT+NCDP=119.3.250.80,5683",AT_OK,0,300); //华为云调试接口iot-coaps.cn-north-4.myhuaweicloud.com
+        if (result == RT_EOK) 
+        {
+            LOG_D("CDP服务器设置成功\r\n");
+            break;
+        }
+        rt_thread_delay(1000);  //延时1S再次查询，循环3次结束
+        count++;
+    }while(count < 3);
+    count = 0;  //次数清零
+    /* 复位UE */
+    check_send_cmd("AT+NRB", AT_OK, 0, 6000);
+    while(RT_EOK != check_send_cmd("AT", AT_OK, 0, AT_DEFAULT_TIMEOUT))
+    {
+        rt_thread_mdelay(1000);
+    }
+    /* 打开射频开关 */
+    do{
+        result = check_send_cmd("AT+CFUN=1", AT_OK, 0, 300);
+        if (result == RT_EOK) 
+        {
+            LOG_D("射频开关已打开\r\n");
+            break;
+        }
+        rt_thread_delay(1000);  //延时1S再次查询，循环5次结束
+        count++;
+    }while(count < 5);
+    count = 0;  //次数清零
+    rt_thread_delay(5000);  //延时5S再次查询
+    /* 检查USIM卡是否初始化成功 */
+    do{
+        result = check_send_cmd("AT+CIMI", "460", 0, 300);
+        if (result == RT_EOK) 
+        {
+            LOG_D("获取到USIM卡的IMSI号\r\n");
+            break;
+        }
+        rt_thread_delay(1000);  //延时1S再次查询，循环10次结束
+        count++;
+    }while(count < 10);
+    count = 0;  //次数清零
+    /* 获取NBIOT IMEI信息 */
+    do{
+        result = check_send_cmd("AT+CGSN=1", "+CGSN", 0, 300);
+        if (result == RT_EOK) 
+        {
+            LOG_D("获取到NBIOT模块IMEI信息\r\n");
+            break;
+        }
+        rt_thread_delay(1000);  //延时1S再次查询，循环10次结束
+        count++;
+    }while(count < 3);
+    count = 0;  //次数清零
+    /* PS附着 */
+    do{
+        result = check_send_cmd("AT+CGATT=1", AT_OK, 0, 1000);
+        if (result == RT_EOK) 
+        {
+            LOG_D("PS附着设置成功\r\n");
+            break;
+        }
+        rt_thread_delay(1000);  //延时1S再次查询，循环3次结束
+        count++;
+    }while(count < 3);
+    count = 0;  //次数清零
+    bc35_query_csq();
+    do{
+		at_exec_cmd(resp,"AT+CEREG?"); //查询模块的网络附着状态
+		rt_thread_delay(1000);
+	}while(rt_event_recv(&nb_event,CEREG,RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,1000, RT_NULL) != RT_EOK);
+    do{
+		at_exec_cmd(resp,"AT+CGATT?");//查询模块的PDP上下文激活状态
+		rt_thread_delay(1000);
+    }while(rt_event_recv(&nb_event,CGATT,RT_EVENT_FLAG_OR,1000, RT_NULL) != RT_EOK ); //RT_EVENT_FLAG_OR:逻辑或的方式接收事件
+    /* query UE'S IP Address */
+    bc35_query_ip();
+    /* 设置指示和消息 */
+    result = check_send_cmd("AT+NNMI=1", AT_OK, 0, 300);
+    if (result != RT_EOK) return result;
+    /* 当模块连接到CDP服务器时，该命令用来上报当前注册状态 */
+    do{
+		result = check_send_cmd("AT+NMSTATUS?", "+NMSTATUS", 0, 300); 
+		rt_thread_delay(1000);
+	}while(rt_event_recv(&nb_event,NMSTATUS,RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,1000, RT_NULL) != RT_EOK);  
 }
 uint32_t ackid = 1;
 uint32_t ackid1 = 1;
+/* 移动 */
+//void nb_send(char* msg, uint16_t len)
+//{
+//    char send[512];
+////    char cmdresult[5] = {0};
+//    at_response_t resp;     //resp:响应结构体
+//    resp = at_create_resp(512,3,500);
+//    Hex2Str(msg,send,len);
+//    at_exec_cmd(resp,"AT+MIPLNOTIFY=0,%d,3200,0,5505,2,%d,%s,0,0,%d",obs_msgid0,len,send,ackid); //对象实例0 移动
+//   
+//    while(at_resp_parse_line_args(resp,2,"%s","OK") > 0)//解析成功
+//    {
+//        rt_kprintf("上报数据成功,完成本次任务\n");
+//        break;        
+//    }
+//    while(at_resp_parse_line_args(resp,1,"%s","ERROR") > 0)//解析成功
+//    {
+//        rt_kprintf("上报数据失败,结束本次任务\n");
+//        rt_event_recv(&nb_event,NBNET,RT_EVENT_FLAG_OR,RT_WAITING_FOREVER, RT_NULL); //在联网的前提下
+//        at_exec_cmd(RT_NULL,"AT+MIPLUPDATE=0,86400,0");  //update lifetime
+//        rt_kprintf("更新生命周期成功\n"); 
+//        break;         
+//    }
+//    ackid++;
+//    if(ackid > 65535)
+//    {
+//        ackid = 1;
+//    }
+//    at_delete_resp(resp);	
+//}
+/*华为云平台*/
 void nb_send(char* msg, uint16_t len)
 {
     char send[512];
-//    char cmdresult[5] = {0};
     at_response_t resp;     //resp:响应结构体
     resp = at_create_resp(512,3,500);
     Hex2Str(msg,send,len);
-    at_exec_cmd(resp,"AT+MIPLNOTIFY=0,%d,3200,0,5505,2,%d,%s,0,0,%d",obs_msgid0,len,send,ackid); //对象实例0
+    at_exec_cmd(resp,"AT+NMGS=%d,%s",len,send); //上报数据
+   
     while(at_resp_parse_line_args(resp,2,"%s","OK") > 0)//解析成功
     {
         rt_kprintf("上报数据成功,完成本次任务\n");
         break;        
-    }
-    while(at_resp_parse_line_args(resp,1,"%s","ERROR") > 0)//解析成功
-    {
-        rt_kprintf("上报数据失败,结束本次任务\n");
-        rt_event_recv(&nb_event,NBNET,RT_EVENT_FLAG_OR,RT_WAITING_FOREVER, RT_NULL); //在联网的前提下
-        at_exec_cmd(RT_NULL,"AT+MIPLUPDATE=0,86400,0");  //update lifetime
-        rt_kprintf("更新生命周期成功\n"); 
-        break;         
-    }
-    ackid++;
-    if(ackid > 65535)
-    {
-        ackid = 1;
     }
     at_delete_resp(resp);	
 }

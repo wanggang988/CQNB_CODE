@@ -34,7 +34,7 @@ struct sdio_pkg
     void *buff;
     rt_uint32_t flag;
 };
-
+																						
 struct rthw_sdio
 {
     struct rt_mmcsd_host *host;
@@ -713,7 +713,7 @@ void SD_LowLevel_DMA_TxConfig(uint32_t *src, uint32_t *dst, uint32_t BufferSize)
     sdio_obj.dma.handle_tx.Init.MemInc              = DMA_MINC_ENABLE;
     sdio_obj.dma.handle_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
     sdio_obj.dma.handle_tx.Init.MemDataAlignment    = DMA_MDATAALIGN_WORD;
-    sdio_obj.dma.handle_tx.Init.Mode                = DMA_NORMAL;
+    sdio_obj.dma.handle_tx.Init.Mode                = DMA_CIRCULAR;
     sdio_obj.dma.handle_tx.Init.Priority            = DMA_PRIORITY_MEDIUM;
 
     HAL_DMA_DeInit(&sdio_obj.dma.handle_tx);
@@ -776,7 +776,7 @@ void SD_LowLevel_DMA_RxConfig(uint32_t *src, uint32_t *dst, uint32_t BufferSize)
     sdio_obj.dma.handle_rx.Init.MemInc              = DMA_MINC_ENABLE;
     sdio_obj.dma.handle_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
     sdio_obj.dma.handle_rx.Init.MemDataAlignment    = DMA_MDATAALIGN_WORD;
-    sdio_obj.dma.handle_rx.Init.Mode                = DMA_NORMAL;
+    sdio_obj.dma.handle_rx.Init.Mode                = DMA_CIRCULAR;
     sdio_obj.dma.handle_rx.Init.Priority            = DMA_PRIORITY_LOW;
 
     HAL_DMA_DeInit(&sdio_obj.dma.handle_rx);

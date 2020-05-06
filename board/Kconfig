@@ -6,7 +6,12 @@ config SOC_STM32L476VG
     default y
 
 menu "Onboard Peripheral Drivers"
-
+config BSP_USING_SDCARD
+	bool "Enable SDCARD(sdio)"
+	select BSP_USING_SDIO
+	select RT_USING_DFS
+	select RT_USING_DFS_ELMFAT
+	default n
 endmenu
 
 menu "On-chip Peripheral Drivers"
@@ -115,8 +120,12 @@ menu "On-chip Peripheral Drivers"
 			bool "Enable ON Chip FLASH"
 			default n
 		endif
-				
-
+	
+	config BSP_USING_SDIO
+        bool "Enable SDIO BUS"
+        select RT_USING_SDIO
+		select RT_USING_DFS
+        default n
 endmenu
 
 menu "Board extended module Drivers"

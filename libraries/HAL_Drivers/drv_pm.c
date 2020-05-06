@@ -48,19 +48,26 @@ static void sleep(struct rt_pm *pm, uint8_t mode)
         break;
 
     case PM_SLEEP_MODE_DEEP:
+//		 HAL_SuspendTick();
+		 rt_kprintf("********* enter stop 2*********\r\n");
         /* Enter STOP 2 mode  */
+		entry_low_power();
         HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
         /* Re-configure the system clock */
         SystemClock_ReConfig(pm->run_mode);
+//		HAL_ResumeTick();
+		rt_kprintf("############exit stop 2##########\r\n");
         break;
 
     case PM_SLEEP_MODE_STANDBY:
         /* Enter STANDBY mode */
+		entry_low_power();
         HAL_PWR_EnterSTANDBYMode();
         break;
 
     case PM_SLEEP_MODE_SHUTDOWN:
         /* Enter SHUTDOWNN mode */
+		entry_low_power();
         HAL_PWREx_EnterSHUTDOWNMode();
         break;
 

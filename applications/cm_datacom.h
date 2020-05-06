@@ -5,9 +5,9 @@
 #include "devtype.h"
 
 /* select which device is used */
-#define USING_DBLH                     1       //确认是否使用地表裂缝仪
+#define USING_DBLH                     0       //确认是否使用地表裂缝仪
 #define USING_QLH                      0      //确认是否使用墙裂缝仪
-#define USING_DMQX                     0       //确认是否使用地面倾斜监测仪
+#define USING_DMQX                     1       //确认是否使用地面倾斜监测仪
 #define USING_MUD                      0      //确认是否使用地面泥位计
 #define USING_RAIN                     0      //确认是否使用雨量计
 #define USING_ALARMER                  0      //确认是否使用智能报警器 

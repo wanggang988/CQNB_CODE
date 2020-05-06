@@ -19,7 +19,7 @@
 //#define RAIN_IT     GET_PIN(C, 2)          //rain interrupt PC2
 //#define VC5_POWER   GET_PIN(E ,8)           // 5VC POWER
 //#define ADC_POWER   GET_PIN(E, 10)          //ADC POWER
-
+void close_all_power(void);
 
 #ifdef RT_USING_SERIAL
 #include "drv_usart.h"
@@ -170,15 +170,70 @@ RT_WEAK void rt_hw_board_init()
     rt_pin_mode(ADC_POWER, PIN_MODE_OUTPUT);
 	rt_pin_mode(V33_I2C, PIN_MODE_OUTPUT);
 	rt_pin_mode(NB_EN_PIN, PIN_MODE_OUTPUT);
+	rt_pin_mode(V33_TF, PIN_MODE_OUTPUT);
+	rt_pin_mode(V33_485, PIN_MODE_OUTPUT);
+	rt_pin_mode(V12_ANGLE, PIN_MODE_OUTPUT);
 	
 	rt_pin_write(VC5_POWER, PIN_HIGH);
     rt_pin_write(ADC_POWER, PIN_HIGH);
     rt_pin_write(V33_POWER, PIN_HIGH);
-	/*开启I2C电源*/
-	rt_pin_write(V33_I2C, PIN_HIGH);
+	
+	rt_pin_write(V33_I2C, PIN_HIGH);          /*开启I2C电源*/
     rt_pin_write(V33_LORA, PIN_HIGH);
     rt_pin_write(V33_232, PIN_HIGH);
-    rt_pin_write(V33_GPS, PIN_HIGH);   //NB_EN_PIN
+    rt_pin_write(V33_GPS, PIN_HIGH);
+	rt_pin_write(V33_485, PIN_HIGH);
+	rt_pin_write(V33_TF, PIN_HIGH);       
+	rt_pin_write(V12_ANGLE,PIN_HIGH);       //V12_ANGLE
 	
 }
 
+void entry_low_power(void)
+{
+	GPIO_InitTypeDef GPIO_InitStructure;
+	/* Enable GPIOs clock */
+	__HAL_RCC_GPIOA_CLK_ENABLE();
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+	__HAL_RCC_GPIOC_CLK_ENABLE(); //PC2雨量中断
+	__HAL_RCC_GPIOD_CLK_ENABLE();
+	__HAL_RCC_GPIOE_CLK_ENABLE();
+	
+	__HAL_RCC_GPIOH_CLK_ENABLE(); 
+	/* Set all GPIO in analog state to reduce power consumption,                */
+	/*   except GPIOC to keep user button interrupt enabled                     */
+	/* Note: Debug using ST-Link is not possible during the execution of this   */
+	/*       example because communication between ST-link and the device       */
+	/*       under test is done through UART. All GPIO pins are disabled (set   */
+	/*       to analog input mode) including  UART I/O pins.                    */
+	GPIO_InitStructure.Pin = GPIO_PIN_All;
+	GPIO_InitStructure.Mode = GPIO_MODE_ANALOG;
+	GPIO_InitStructure.Pull = GPIO_NOPULL;
+
+	HAL_GPIO_Init(GPIOA, &GPIO_InitStructure); 
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
+	HAL_GPIO_Init(GPIOC, &GPIO_InitStructure);
+	HAL_GPIO_Init(GPIOD, &GPIO_InitStructure); 
+	HAL_GPIO_Init(GPIOE, &GPIO_InitStructure);
+
+	HAL_GPIO_Init(GPIOH, &GPIO_InitStructure); 
+	/* Disable GPIOs clock */
+	__HAL_RCC_GPIOA_CLK_DISABLE();
+	__HAL_RCC_GPIOB_CLK_DISABLE();
+	__HAL_RCC_GPIOC_CLK_DISABLE();
+	__HAL_RCC_GPIOD_CLK_DISABLE();
+	__HAL_RCC_GPIOE_CLK_DISABLE();
+	__HAL_RCC_GPIOF_CLK_DISABLE();
+	__HAL_RCC_GPIOH_CLK_DISABLE();
+	
+//	rt_pin_write(VC5_POWER, PIN_LOW);
+//    rt_pin_write(ADC_POWER, PIN_LOW);
+//    rt_pin_write(V33_POWER, PIN_LOW);
+//	
+//	rt_pin_write(V33_I2C, PIN_LOW);
+//    rt_pin_write(V33_LORA, PIN_LOW);
+//    rt_pin_write(V33_232, PIN_LOW);
+//    rt_pin_write(V33_GPS, PIN_LOW);
+//	rt_pin_write(V33_485, PIN_LOW);
+//	rt_pin_write(V33_TF, PIN_LOW);       
+//	rt_pin_write(V12_ANGLE,PIN_LOW);      
+}

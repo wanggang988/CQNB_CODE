@@ -80,7 +80,7 @@ void rs485_thread_entry(void *parameter)
 				i=0;
 				rt_kprintf("进入RS485线程\n");
 
-//				parase_degree(rsbuf);  //角度解析
+				parase_degree(rsbuf);  //角度解析
 //				parase_mud();     //泥位解析
 //				adc_vol_sample();
                 rt_kprintf("退出RS485线程\n");
@@ -230,7 +230,7 @@ void sample_thread_entry(void *parameter)        //采样频率
 //        accreadxyz(accdata);
 //		parase_accdegree(accdata); //加速度解析函数
         adc_vol_sample();
-//		read_data(readangle,8);
+		read_data(readangle,8);
 //		read_data(readmud,8);
 //        rt_kprintf("rain value = %d\r\n",rainvalue);
 //        if((rainvalue - last) * 0.1 > cmrain)      //将雨量值大于阈值

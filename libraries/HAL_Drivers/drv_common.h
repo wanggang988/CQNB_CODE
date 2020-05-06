@@ -37,8 +37,13 @@ void _Error_Handler(char *s, int num);
 #define V33_232     GET_PIN(E, 2)       //PE2 232 Power
 #define V33_I2C     GET_PIN(E, 14)       //PE14 I2C Power
 #define V33_GPS     GET_PIN(E, 12)       //PE2 GPS Power
+#define V33_TF   	GET_PIN(E, 15) 			//TF POWER ON PE15
+#define V33_485   	GET_PIN(B, 1) 			//485 POWER ON PB1
 #define RAIN_IT     GET_PIN(C, 2)          //rain interrupt PC2
 #define VC5_POWER   GET_PIN(E ,8)           // 5VC POWER
 #define ADC_POWER   GET_PIN(E, 10)          //ADC POWER
 #define NB_EN_PIN   GET_PIN(B, 12) 			//NB POWER ON PB12
+#define V12_ANGLE   GET_PIN(E, 7) 			//NB POWER ON PE7
+void entry_low_power(void);
+
 #endif
